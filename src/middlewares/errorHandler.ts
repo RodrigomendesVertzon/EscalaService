@@ -1,0 +1,5 @@
+import {ErrorRequestHandler} from 'express';
+import {ZodError} from 'zod';
+import {logger} from '../config/logger';
+import {AppError} from '../utils/AppError';
+export const errorHandler:ErrorRequestHandler=(err,req,res,_next)=>{if(err instanceof ZodError)return res.status(400).json({error:'DADOS_INVALIDOS',details:err.flatten(),correlationId:req.correlationId});if(err instanceof AppError)return res.status(err.statusCode).json({error:err.code,message:err.message,details:err.details,correlationId:req.correlationId});const e=err as {code?:string;sqlMessage?:string};logger.error({err,correlationId:req.correlationId},'request failed');if(e.code==='ER_DUP_ENTRY')return res.status(409).json({error:'REGISTRO_DUPLICADO',message:'Registro duplicado',correlationId:req.correlationId});if(e.code==='ER_NO_REFERENCED_ROW_2')return res.status(409).json({error:'REFERENCIA_INVALIDA',message:'Referência inválida',correlationId:req.correlationId});return res.status(500).json({error:'ERRO_INTERNO',message:'Erro interno do servidor',correlationId:req.correlationId});};

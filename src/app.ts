@@ -1,0 +1,18 @@
+import express from 'express';
+import cors from 'cors';
+import helmet from 'helmet';
+import pinoHttp from 'pino-http';
+import {logger} from './config/logger';
+import {db} from './config/db';
+import {correlationId} from './middlewares/correlationId';
+import {errorHandler} from './middlewares/errorHandler';
+import {escalaRoutes} from './routes/escalaRoutes';
+export const app=express();
+app.disable('x-powered-by');
+app.use(helmet());app.use(cors());app.use(express.json({limit:'128kb'}));
+app.use(correlationId);app.use(pinoHttp({logger,redact:['req.headers.authorization']}));
+app.get('/health/live',(_req,res)=>res.json({status:'UP',service:'escala-service'}));
+app.get('/health/ready',async(_req,res)=>{try{await db.query('SELECT 1');res.json({status:'UP',database:'UP'});}catch{res.status(503).json({status:'DOWN',database:'DOWN'});}});
+app.use('/v1',escalaRoutes);
+app.use((req,res)=>res.status(404).json({error:'ROTA_NAO_ENCONTRADA',message:`Rota ${req.method} ${req.path} não encontrada`,correlationId:req.correlationId}));
+app.use(errorHandler);

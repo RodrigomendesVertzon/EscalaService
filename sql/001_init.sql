@@ -1,0 +1,101 @@
+CREATE DATABASE IF NOT EXISTS escala_service CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
+USE escala_service;
+
+CREATE TABLE IF NOT EXISTS turno (
+ id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+ empresa_id BIGINT UNSIGNED NOT NULL, unidade_id BIGINT UNSIGNED NOT NULL, setor_id BIGINT UNSIGNED NOT NULL,
+ nome VARCHAR(150) NOT NULL, inicio DATETIME(3) NOT NULL, fim DATETIME(3) NOT NULL,
+ status ENUM('RASCUNHO','PUBLICADO','EM_ANDAMENTO','ENCERRADO','CANCELADO') NOT NULL DEFAULT 'RASCUNHO',
+ versao BIGINT UNSIGNED NOT NULL DEFAULT 1, criado_por BIGINT UNSIGNED NOT NULL,
+ created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3), updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+ INDEX idx_turno_empresa_inicio (empresa_id,inicio), INDEX idx_turno_setor_inicio (setor_id,inicio),
+ CONSTRAINT ck_turno_intervalo CHECK (fim > inicio)
+);
+CREATE TABLE IF NOT EXISTS vaga (
+ id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, turno_id BIGINT UNSIGNED NOT NULL,
+ funcao VARCHAR(100) NOT NULL, quantidade INT UNSIGNED NOT NULL,
+ modalidade ENUM('HORA','TURNO') NOT NULL, valor_base DECIMAL(12,2) NOT NULL,
+ adicional_noturno DECIMAL(12,2) NOT NULL DEFAULT 0,
+ status ENUM('ABERTA','SUSPENSA','ENCERRADA') NOT NULL DEFAULT 'ABERTA',
+ versao BIGINT UNSIGNED NOT NULL DEFAULT 1,
+ created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3), updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+ CONSTRAINT fk_vaga_turno FOREIGN KEY(turno_id) REFERENCES turno(id),
+ CONSTRAINT ck_vaga_quantidade CHECK (quantidade BETWEEN 1 AND 10000),
+ CONSTRAINT ck_vaga_valores CHECK (valor_base >= 0 AND adicional_noturno >= 0)
+);
+CREATE TABLE IF NOT EXISTS candidatura (
+ id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, vaga_id BIGINT UNSIGNED NOT NULL, freelancer_id BIGINT UNSIGNED NOT NULL,
+ status ENUM('PENDENTE','APROVADA','REJEITADA','CANCELADA') NOT NULL DEFAULT 'PENDENTE',
+ created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3), updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+ UNIQUE KEY uk_candidatura (vaga_id,freelancer_id), CONSTRAINT fk_candidatura_vaga FOREIGN KEY(vaga_id) REFERENCES vaga(id)
+);
+CREATE TABLE IF NOT EXISTS alocacao (
+ id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, vaga_id BIGINT UNSIGNED NOT NULL, freelancer_id BIGINT UNSIGNED NOT NULL,
+ status ENUM('PENDENTE_ACEITE','ACEITA','RECUSADA','CANCELADA','CONCLUIDA') NOT NULL DEFAULT 'PENDENTE_ACEITE',
+ valor_base_acordado DECIMAL(12,2) NOT NULL, adicional_noturno_acordado DECIMAL(12,2) NOT NULL,
+ modalidade_acordada ENUM('HORA','TURNO') NOT NULL,
+ versao BIGINT UNSIGNED NOT NULL DEFAULT 1, aceite_em DATETIME(3) NULL,
+ created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3), updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+ UNIQUE KEY uk_alocacao (vaga_id,freelancer_id), INDEX idx_alocacao_freelancer (freelancer_id,status),
+ CONSTRAINT fk_alocacao_vaga FOREIGN KEY(vaga_id) REFERENCES vaga(id),
+ CONSTRAINT ck_alocacao_valores CHECK(valor_base_acordado >= 0 AND adicional_noturno_acordado >= 0)
+);
+CREATE TABLE IF NOT EXISTS bonus (
+ id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, turno_id BIGINT UNSIGNED NOT NULL, vaga_id BIGINT UNSIGNED NULL,
+ alocacao_id BIGINT UNSIGNED NULL,
+ tipo ENUM('INDIVIDUAL','COLETIVO') NOT NULL, valor DECIMAL(12,2) NOT NULL,
+ condicao_todos_presentes BOOLEAN NOT NULL DEFAULT TRUE,
+ descricao VARCHAR(300) NULL,
+ created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+ CONSTRAINT fk_bonus_turno FOREIGN KEY(turno_id) REFERENCES turno(id),
+ CONSTRAINT fk_bonus_vaga FOREIGN KEY(vaga_id) REFERENCES vaga(id),
+ CONSTRAINT fk_bonus_alocacao FOREIGN KEY(alocacao_id) REFERENCES alocacao(id),
+ CONSTRAINT ck_bonus_valor CHECK(valor >= 0),
+ CONSTRAINT ck_bonus_escopo CHECK((tipo='INDIVIDUAL' AND alocacao_id IS NOT NULL) OR (tipo='COLETIVO' AND vaga_id IS NOT NULL AND alocacao_id IS NULL))
+);
+CREATE TABLE IF NOT EXISTS alteracao_escala (
+ id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, turno_id BIGINT UNSIGNED NOT NULL,
+ campo VARCHAR(100) NOT NULL, anterior JSON NULL, novo JSON NULL,
+ motivo VARCHAR(500) NOT NULL, actor_auth_user_id BIGINT UNSIGNED NOT NULL,
+ created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+ CONSTRAINT fk_alteracao_turno FOREIGN KEY(turno_id) REFERENCES turno(id)
+);
+CREATE TABLE IF NOT EXISTS aceite_alteracao (
+ id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, alteracao_id BIGINT UNSIGNED NOT NULL, alocacao_id BIGINT UNSIGNED NOT NULL,
+ status ENUM('PENDENTE','ACEITO','REJEITADO','EXPIRADO') NOT NULL DEFAULT 'PENDENTE',
+ respondido_em DATETIME(3) NULL,
+ created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+ UNIQUE KEY uk_aceite_alteracao (alteracao_id,alocacao_id),
+ CONSTRAINT fk_aceite_alteracao FOREIGN KEY(alteracao_id) REFERENCES alteracao_escala(id),
+ CONSTRAINT fk_aceite_alocacao FOREIGN KEY(alocacao_id) REFERENCES alocacao(id)
+);
+CREATE TABLE IF NOT EXISTS idempotencia (
+ id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, chave VARCHAR(150) NOT NULL, operacao VARCHAR(100) NOT NULL,
+ resultado JSON NULL, created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+ UNIQUE KEY uk_idempotencia (operacao,chave)
+);
+CREATE TABLE IF NOT EXISTS outbox_event (
+ id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, event_id CHAR(36) NOT NULL,
+ aggregate_type VARCHAR(80) NOT NULL, aggregate_id BIGINT UNSIGNED NOT NULL,
+ event_type VARCHAR(120) NOT NULL, event_version INT UNSIGNED NOT NULL DEFAULT 1,
+ payload JSON NOT NULL, status ENUM('PENDENTE','PUBLICANDO','PUBLICADO','ERRO') NOT NULL DEFAULT 'PENDENTE',
+ tentativas INT UNSIGNED NOT NULL DEFAULT 0, created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+ UNIQUE KEY uk_outbox_event (event_id), INDEX idx_outbox_status (status,created_at)
+);
+CREATE TABLE IF NOT EXISTS auditoria (
+ id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, entidade VARCHAR(80) NOT NULL, entidade_id BIGINT UNSIGNED NOT NULL,
+ acao VARCHAR(100) NOT NULL, actor_auth_user_id BIGINT UNSIGNED NOT NULL,
+ correlation_id VARCHAR(100) NULL, dados JSON NULL,
+ created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3), INDEX idx_auditoria_entidade (entidade,entidade_id,created_at)
+);
+DROP TRIGGER IF EXISTS trg_auditoria_no_update;
+DROP TRIGGER IF EXISTS trg_auditoria_no_delete;
+DELIMITER $$
+CREATE TRIGGER trg_auditoria_no_update BEFORE UPDATE ON auditoria FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='Auditoria imutavel'; END$$
+CREATE TRIGGER trg_auditoria_no_delete BEFORE DELETE ON auditoria FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='Auditoria imutavel'; END$$
+DELIMITER ;
+CREATE OR REPLACE VIEW vw_projecao_turno AS
+ SELECT t.id turno_id,t.empresa_id,t.unidade_id,t.setor_id,t.inicio,t.fim,
+ COALESCE(SUM(v.quantidade*(CASE WHEN v.modalidade='HORA' THEN v.valor_base*(TIMESTAMPDIFF(MINUTE,t.inicio,t.fim)/60.0) ELSE v.valor_base END + v.adicional_noturno)),0) AS custo_base_planejado,
+ COALESCE(SUM(v.quantidade),0) AS profissionais_planejados
+ FROM turno t LEFT JOIN vaga v ON v.turno_id=t.id GROUP BY t.id;
